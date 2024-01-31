@@ -22,6 +22,9 @@ include = [
     "Cargo.toml",
 ]
 
+[lib]
+doctest = false
+
 [dependencies]
 
 combine = "4.6"
