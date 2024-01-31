@@ -17,9 +17,10 @@
 // These are unit tests for the eBPF “verifier”.
 
 extern crate rbpf;
+extern crate origrbpf;
 
-use rbpf::assembler::assemble;
-use rbpf::ebpf;
+use origrbpf::assembler::assemble;
+use origrbpf::ebpf;
 
 #[test]
 #[should_panic(expected = "[Verifier] Error: unsupported argument for LE/BE (insn #0)")]

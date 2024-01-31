@@ -19,10 +19,11 @@
 #![cfg_attr(feature = "cargo-clippy", allow(clippy::unreadable_literal))]
 
 extern crate rbpf;
+extern crate origrbpf;
 mod common;
 
-use rbpf::helpers;
-use rbpf::assembler::assemble;
+use origrbpf::helpers;
+use origrbpf::assembler::assemble;
 use common::{TCP_SACK_ASM, TCP_SACK_MATCH, TCP_SACK_NOMATCH};
 
 #[test]

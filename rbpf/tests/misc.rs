@@ -18,10 +18,11 @@
 // use std::path::PathBuf;
 
 extern crate rbpf;
+extern crate origrbpf;
 
 use std::io::{Error, ErrorKind};
-use rbpf::assembler::assemble;
-use rbpf::helpers;
+use origrbpf::assembler::assemble;
+use origrbpf::helpers;
 
 // The following two examples have been compiled from C with the following command:
 //
@@ -199,7 +200,7 @@ fn test_vm_mbuff() {
 // Program and memory come from uBPF test ldxh.
 #[test]
 fn test_vm_mbuff_with_rust_api() {
-    use rbpf::insn_builder::*;
+    use origrbpf::insn_builder::*;
 
     let mut program = BpfCode::new();
     program
