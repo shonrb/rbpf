@@ -11,7 +11,7 @@ fn main() {
 
     // This is an eBPF VM for programs reading from a given memory area (it
     // directly reads from packet data)
-    let vm = rbpf::EbpfVmRaw::new(Some(prog)).unwrap();
+    let vm = rbpf::EbpfVmRaw::new(Some(prog));
 
     assert_eq!(vm.execute_program(mem).unwrap(), 0x11);
 }

@@ -6,13 +6,16 @@
 //      (Translation to Rust, MetaBuff/multiple classes addition, hashmaps for helpers)
 
 use core::str::FromStr;
+use core::fmt::Debug;
 
 use crate::ebpf;
 use heapless::{FnvIndexMap, String, Vec};
 
+#[derive(Debug)]
 pub struct Error {
     msg: String<256>,
 }
+
 impl Error {
     pub(crate) fn new(msg: &str) -> Self {
         Self {
