@@ -206,7 +206,7 @@ impl<'a> EbpfVmMbuff<'a> {
     /// let res = vm.execute_program(mem, &mut mbuff).unwrap();
     /// assert_eq!(res, 0x2211);
     /// ```
-    pub fn execute_program(&self, mem: &[u8], mbuff: &[u8]) -> u64 {
+    pub fn execute_program(&self, mem: &[u8], mbuff: &[u8]) -> Result<u64, Error> {
         interpreter::execute_program(self.prog, mem, mbuff, &self.helpers)
     }
 }
@@ -323,9 +323,9 @@ impl<'a> EbpfVmRaw<'a> {
     /// // Instantiate a VM.
     /// let vm = rbpf::EbpfVmRaw::new(Some(prog)).unwrap();
     /// ```
-    pub fn new(prog: Option<&'a [u8]>) -> Result<EbpfVmRaw<'a>, Error> {
-        let parent = EbpfVmMbuff::new(prog)?;
-        Ok(EbpfVmRaw { parent })
+    pub fn new(prog: Option<&'a [u8]>) -> EbpfVmRaw<'a> {
+        let parent = EbpfVmMbuff::new(prog);
+        EbpfVmRaw { parent }
     }
 
     /// Load a new eBPF program into the virtual machine instance.
@@ -354,41 +354,9 @@ impl<'a> EbpfVmRaw<'a> {
     /// let res = vm.execute_program(mem).unwrap();
     /// assert_eq!(res, 0x22cc);
     /// ```
-    pub fn set_program(&mut self, prog: &'a [u8]) -> Result<(), Error> {
-        self.parent.set_program(prog)?;
-        Ok(())
+    pub fn set_program(&mut self, prog: &'a [u8]) {
+        self.parent.set_program(prog);
     }
-
-    /// Set a new verifier function. The function should return an `Error` if the program should be
-    /// rejected by the virtual machine. If a program has been loaded to the VM already, the
-    /// verifier is immediately run.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::io::{Error, ErrorKind};
-    /// use rbpf::ebpf;
-    ///
-    /// // Define a simple verifier function.
-    /// fn verifier(prog: &[u8]) -> Result<(), Error> {
-    ///     let last_insn = ebpf::get_insn(prog, (prog.len() / ebpf::INSN_SIZE) - 1);
-    ///     if last_insn.opc != ebpf::EXIT {
-    ///         return Err(Error::new(ErrorKind::Other,
-    ///                    "[Verifier] Error: program does not end with “EXIT” instruction"));
-    ///     }
-    ///     Ok(())
-    /// }
-    ///
-    /// let prog1 = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// // Instantiate a VM.
-    /// let mut vm = rbpf::EbpfVmMbuff::new(Some(prog1)).unwrap();
-    /// // Change the verifier.
-    /// vm.set_verifier(verifier).unwrap();
-    /// ```
 
     /// Register a built-in or user-defined helper function in order to use it later from within
     /// the eBPF program. The helper is registered into a hashmap, so the `key` can be any `u32`.
@@ -454,7 +422,7 @@ impl<'a> EbpfVmRaw<'a> {
     /// let res = vm.execute_program(mem).unwrap();
     /// assert_eq!(res, 0x22cc);
     /// ```
-    pub fn execute_program(&self, mem: &'a mut [u8]) {
+    pub fn execute_program(&self, mem: &'a mut [u8]) -> Result<u64, Error> {
         self.parent.execute_program(mem, &[])
     }
 }
@@ -519,7 +487,7 @@ impl<'a> EbpfVmNoData<'a> {
     /// let vm = rbpf::EbpfVmNoData::new(Some(prog));
     /// ```
     pub fn new(prog: Option<&'a [u8]>) -> Result<EbpfVmNoData<'a>, Error> {
-        let parent = EbpfVmRaw::new(prog)?;
+        let parent = EbpfVmRaw::new(prog);
         Ok(EbpfVmNoData { parent })
     }
 
@@ -548,9 +516,8 @@ impl<'a> EbpfVmNoData<'a> {
     /// let res = vm.execute_program().unwrap();
     /// assert_eq!(res, 0x1122);
     /// ```
-    pub fn set_program(&mut self, prog: &'a [u8]) -> Result<(), Error> {
-        self.parent.set_program(prog)?;
-        Ok(())
+    pub fn set_program(&mut self, prog: &'a [u8]) {
+        self.parent.set_program(prog);
     }
 
 
@@ -609,7 +576,7 @@ impl<'a> EbpfVmNoData<'a> {
     /// let res = vm.execute_program().unwrap();
     /// assert_eq!(res, 0x1122);
     /// ```
-    pub fn execute_program(&self) -> Result<u64, Error> {
+    pub fn execute_program(&self) -> Result<u64, Error> { 
         self.parent.execute_program(&mut [])
     }
 }

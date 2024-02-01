@@ -14,7 +14,7 @@
 //! <https://www.kernel.org/doc/Documentation/networking/filter.txt>, or for a shorter version of
 //! the list of the operation codes: <https://github.com/iovisor/bpf-docs/blob/master/eBPF.md>
 
-use byteorder::{ByteOrder, LittleEndian};
+use heapless::Vec;
 
 /// Maximum number of instructions in an eBPF program.
 pub const PROG_MAX_INSNS: usize = 4096;
@@ -500,8 +500,8 @@ impl Insn {
     /// };
     /// assert_eq!(insn.to_vec(), prog);
     /// ```
-    pub fn to_vec(&self) -> Vec<u8> {
-        vec![
+    pub fn to_vec(&self) -> [u8; 8] {
+        [
             self.opc,
             self.src.wrapping_shl(4) | self.dst,
             (self.off & 0xff) as u8,
@@ -557,9 +557,9 @@ pub fn get_insn(prog: &[u8], idx: usize) -> Insn {
     Insn {
         opc:  prog[INSN_SIZE * idx],
         dst:  prog[INSN_SIZE * idx + 1] & 0x0f,
-        src: (prog[INSN_SIZE * idx + 1] & 0xf0) >> 4,
-        off: LittleEndian::read_i16(&prog[(INSN_SIZE * idx + 2) .. ]),
-        imm: LittleEndian::read_i32(&prog[(INSN_SIZE * idx + 4) .. ]),
+        src: (prog[INSN_SIZE * idx + 1] & 0xf0) >> 4, 
+        off: i16::from_le_bytes(prog[(INSN_SIZE * idx + 2)..(INSN_SIZE * idx + 4)].try_into().unwrap()),
+        imm: i32::from_le_bytes(prog[(INSN_SIZE * idx + 4)..(INSN_SIZE * idx + 8)].try_into().unwrap()),
     }
 }
 
@@ -607,13 +607,13 @@ pub fn get_insn(prog: &[u8], idx: usize) -> Insn {
 ///     },
 /// ]);
 /// ```
-pub fn to_insn_vec(prog: &[u8]) -> Vec<Insn> {
+pub fn to_insn_vec(prog: &[u8]) -> Vec<Insn, 1024> {
     if prog.len() % INSN_SIZE != 0 {
         panic!("Error: eBPF program length must be a multiple of {:?} octets",
                INSN_SIZE);
     }
 
-    let mut res = vec![];
+    let mut res = Vec::new();
     let mut insn_ptr:usize = 0;
 
     while insn_ptr * INSN_SIZE < prog.len() {
