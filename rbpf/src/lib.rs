@@ -4,12 +4,13 @@
 // Copyright 2023 Isovalent, Inc. <quentin@isovalent.com>
 
 //! Virtual machine and JIT compiler for eBPF programs.
+#![no_std]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/qmonnet/rbpf/main/misc/rbpf.png",
     html_favicon_url = "https://raw.githubusercontent.com/qmonnet/rbpf/main/misc/rbpf.ico"
 )]
 // Test examples from README.md as part as doc tests.
-#![doc = include_str!("../README.md")]
+#![doc = core::include_str!("../README.md")]
 #![warn(missing_docs)]
 // There are unused mut warnings due to unsafe code.
 #![allow(unused_mut)]
@@ -27,28 +28,11 @@
     )
 )]
 
-extern crate byteorder;
-extern crate combine;
-extern crate time;
-
-use byteorder::{ByteOrder, LittleEndian};
-use std::collections::HashMap;
-use std::io::{Error, ErrorKind};
-use std::u32;
-
 pub mod ebpf;
 mod interpreter;
-mod verifier;
 
-/// eBPF verification function that returns an error if the program does not meet its requirements.
-///
-/// Some examples of things the verifier may reject the program for:
-///
-///   - Program does not terminate.
-///   - Unknown instructions.
-///   - Bad formed instruction.
-///   - Unknown eBPF helper index.
-pub type Verifier = fn(prog: &[u8]) -> Result<(), Error>;
+use heapless::{FnvIndexMap, Vec};
+use interpreter::Error;
 
 /// eBPF helper function.
 pub type Helper = fn(u64, u64, u64, u64, u64) -> u64;
@@ -60,7 +44,7 @@ pub type Helper = fn(u64, u64, u64, u64, u64) -> u64;
 struct MetaBuff {
     data_offset: usize,
     data_end_offset: usize,
-    buffer: Vec<u8>,
+    buffer: Vec<u8, 1024>,
 }
 
 /// A virtual machine to run eBPF program. This kind of VM is used for programs expecting to work
@@ -97,8 +81,7 @@ struct MetaBuff {
 /// ```
 pub struct EbpfVmMbuff<'a> {
     prog: Option<&'a [u8]>,
-    verifier: Verifier,
-    helpers: HashMap<u32, ebpf::Helper>,
+    helpers: FnvIndexMap<u32, ebpf::Helper, 128>,
 }
 
 impl<'a> EbpfVmMbuff<'a> {
@@ -117,16 +100,11 @@ impl<'a> EbpfVmMbuff<'a> {
     /// // Instantiate a VM.
     /// let mut vm = rbpf::EbpfVmMbuff::new(Some(prog)).unwrap();
     /// ```
-    pub fn new(prog: Option<&'a [u8]>) -> Result<EbpfVmMbuff<'a>, Error> {
-        if let Some(prog) = prog {
-            verifier::check(prog)?;
-        }
-
-        Ok(EbpfVmMbuff {
+    pub fn new(prog: Option<&'a [u8]>) -> EbpfVmMbuff<'a> {
+        EbpfVmMbuff {
             prog,
-            verifier: verifier::check,
-            helpers: HashMap::new(),
-        })
+            helpers: FnvIndexMap::new(),
+        }
     }
 
     /// Load a new eBPF program into the virtual machine instance.
@@ -148,49 +126,10 @@ impl<'a> EbpfVmMbuff<'a> {
     /// let mut vm = rbpf::EbpfVmMbuff::new(Some(prog1)).unwrap();
     /// vm.set_program(prog2).unwrap();
     /// ```
-    pub fn set_program(&mut self, prog: &'a [u8]) -> Result<(), Error> {
-        (self.verifier)(prog)?;
+    pub fn set_program(&mut self, prog: &'a [u8]) {
         self.prog = Some(prog);
-        Ok(())
     }
 
-    /// Set a new verifier function. The function should return an `Error` if the program should be
-    /// rejected by the virtual machine. If a program has been loaded to the VM already, the
-    /// verifier is immediately run.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::io::{Error, ErrorKind};
-    /// use rbpf::ebpf;
-    ///
-    /// // Define a simple verifier function.
-    /// fn verifier(prog: &[u8]) -> Result<(), Error> {
-    ///     let last_insn = ebpf::get_insn(prog, (prog.len() / ebpf::INSN_SIZE) - 1);
-    ///     if last_insn.opc != ebpf::EXIT {
-    ///         return Err(Error::new(ErrorKind::Other,
-    ///                    "[Verifier] Error: program does not end with “EXIT” instruction"));
-    ///     }
-    ///     Ok(())
-    /// }
-    ///
-    /// let prog1 = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// // Instantiate a VM.
-    /// let mut vm = rbpf::EbpfVmMbuff::new(Some(prog1)).unwrap();
-    /// // Change the verifier.
-    /// vm.set_verifier(verifier).unwrap();
-    /// ```
-    pub fn set_verifier(&mut self, verifier: Verifier) -> Result<(), Error> {
-        if let Some(prog) = self.prog {
-            verifier(prog)?;
-        }
-        self.verifier = verifier;
-        Ok(())
-    }
 
     /// Register a built-in or user-defined helper function in order to use it later from within
     /// the eBPF program. The helper is registered into a hashmap, so the `key` can be any `u32`.
@@ -227,9 +166,8 @@ impl<'a> EbpfVmMbuff<'a> {
     /// // standard output.
     /// vm.register_helper(6, helpers::bpf_trace_printf).unwrap();
     /// ```
-    pub fn register_helper(&mut self, key: u32, function: Helper) -> Result<(), Error> {
+    pub fn register_helper(&mut self, key: u32, function: Helper) {
         self.helpers.insert(key, function);
-        Ok(())
     }
 
     /// Execute the program loaded, with the given packet data and metadata buffer.
@@ -268,7 +206,7 @@ impl<'a> EbpfVmMbuff<'a> {
     /// let res = vm.execute_program(mem, &mut mbuff).unwrap();
     /// assert_eq!(res, 0x2211);
     /// ```
-    pub fn execute_program(&self, mem: &[u8], mbuff: &[u8]) -> Result<u64, Error> {
+    pub fn execute_program(&self, mem: &[u8], mbuff: &[u8]) -> u64 {
         interpreter::execute_program(self.prog, mem, mbuff, &self.helpers)
     }
 }
@@ -340,226 +278,6 @@ impl<'a> EbpfVmMbuff<'a> {
 /// let res = vm.execute_program(mem2).unwrap();
 /// assert_eq!(res, 0x27);
 /// ```
-pub struct EbpfVmFixedMbuff<'a> {
-    parent: EbpfVmMbuff<'a>,
-    mbuff: MetaBuff,
-}
-
-impl<'a> EbpfVmFixedMbuff<'a> {
-    /// Create a new virtual machine instance, and load an eBPF program into that instance.
-    /// When attempting to load the program, it passes through a simple verifier.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let prog = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x79, 0x12, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem from r1[0x40] to r2
-    ///     0x07, 0x02, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, // add r2, 5
-    ///     0x79, 0x11, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem_end from r1[0x50] to r1
-    ///     0x2d, 0x12, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // if r2 > r1 skip 3 instructions
-    ///     0x71, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // load r2 (= *(mem + 5)) into r0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// // Instantiate a VM. Note that we provide the start and end offsets for mem pointers.
-    /// let mut vm = rbpf::EbpfVmFixedMbuff::new(Some(prog), 0x40, 0x50).unwrap();
-    /// ```
-    pub fn new(
-        prog: Option<&'a [u8]>,
-        data_offset: usize,
-        data_end_offset: usize,
-    ) -> Result<EbpfVmFixedMbuff<'a>, Error> {
-        let parent = EbpfVmMbuff::new(prog)?;
-        let get_buff_len = |x: usize, y: usize| if x >= y { x + 8 } else { y + 8 };
-        let buffer = vec![0u8; get_buff_len(data_offset, data_end_offset)];
-        let mbuff = MetaBuff {
-            data_offset,
-            data_end_offset,
-            buffer,
-        };
-        Ok(EbpfVmFixedMbuff { parent, mbuff })
-    }
-
-    /// Load a new eBPF program into the virtual machine instance.
-    ///
-    /// At the same time, load new offsets for storing pointers to start and end of packet data in
-    /// the internal metadata buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let prog1 = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    /// let prog2 = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x79, 0x12, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem from r1[0x40] to r2
-    ///     0x07, 0x02, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, // add r2, 5
-    ///     0x79, 0x11, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem_end from r1[0x50] to r1
-    ///     0x2d, 0x12, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // if r2 > r1 skip 3 instructions
-    ///     0x71, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // load r2 (= *(mem + 5)) into r0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// let mem = &mut [
-    ///     0xaa, 0xbb, 0x11, 0x22, 0xcc, 0x27,
-    /// ];
-    ///
-    /// let mut vm = rbpf::EbpfVmFixedMbuff::new(Some(prog1), 0, 0).unwrap();
-    /// vm.set_program(prog2, 0x40, 0x50);
-    ///
-    /// let res = vm.execute_program(mem).unwrap();
-    /// assert_eq!(res, 0x27);
-    /// ```
-    pub fn set_program(
-        &mut self,
-        prog: &'a [u8],
-        data_offset: usize,
-        data_end_offset: usize,
-    ) -> Result<(), Error> {
-        let get_buff_len = |x: usize, y: usize| if x >= y { x + 8 } else { y + 8 };
-        let buffer = vec![0u8; get_buff_len(data_offset, data_end_offset)];
-        self.mbuff.buffer = buffer;
-        self.mbuff.data_offset = data_offset;
-        self.mbuff.data_end_offset = data_end_offset;
-        self.parent.set_program(prog)?;
-        Ok(())
-    }
-
-    /// Set a new verifier function. The function should return an `Error` if the program should be
-    /// rejected by the virtual machine. If a program has been loaded to the VM already, the
-    /// verifier is immediately run.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::io::{Error, ErrorKind};
-    /// use rbpf::ebpf;
-    ///
-    /// // Define a simple verifier function.
-    /// fn verifier(prog: &[u8]) -> Result<(), Error> {
-    ///     let last_insn = ebpf::get_insn(prog, (prog.len() / ebpf::INSN_SIZE) - 1);
-    ///     if last_insn.opc != ebpf::EXIT {
-    ///         return Err(Error::new(ErrorKind::Other,
-    ///                    "[Verifier] Error: program does not end with “EXIT” instruction"));
-    ///     }
-    ///     Ok(())
-    /// }
-    ///
-    /// let prog1 = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// // Instantiate a VM.
-    /// let mut vm = rbpf::EbpfVmMbuff::new(Some(prog1)).unwrap();
-    /// // Change the verifier.
-    /// vm.set_verifier(verifier).unwrap();
-    /// ```
-    pub fn set_verifier(&mut self, verifier: Verifier) -> Result<(), Error> {
-        self.parent.set_verifier(verifier)
-    }
-
-    /// Register a built-in or user-defined helper function in order to use it later from within
-    /// the eBPF program. The helper is registered into a hashmap, so the `key` can be any `u32`.
-    ///
-    /// If using JIT-compiled eBPF programs, be sure to register all helpers before compiling the
-    /// program. You should be able to change registered helpers after compiling, but not to add
-    /// new ones (i.e. with new keys).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use rbpf::helpers;
-    ///
-    /// // This program was compiled with clang, from a C program containing the following single
-    /// // instruction: `return bpf_trace_printk("foo %c %c %c\n", 10, 1, 2, 3);`
-    /// let prog = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x79, 0x12, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem from r1[0x40] to r2
-    ///     0x07, 0x02, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, // add r2, 5
-    ///     0x79, 0x11, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem_end from r1[0x50] to r1
-    ///     0x2d, 0x12, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, // if r2 > r1 skip 6 instructions
-    ///     0x71, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // load r2 (= *(mem + 5)) into r1
-    ///     0xb7, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r2, 0
-    ///     0xb7, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r3, 0
-    ///     0xb7, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r4, 0
-    ///     0xb7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r5, 0
-    ///     0x85, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // call helper with key 1
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// let mem = &mut [
-    ///     0xaa, 0xbb, 0x11, 0x22, 0xcc, 0x09,
-    /// ];
-    ///
-    /// // Instantiate a VM.
-    /// let mut vm = rbpf::EbpfVmFixedMbuff::new(Some(prog), 0x40, 0x50).unwrap();
-    ///
-    /// // Register a helper. This helper will store the result of the square root of r1 into r0.
-    /// vm.register_helper(1, helpers::sqrti);
-    ///
-    /// let res = vm.execute_program(mem).unwrap();
-    /// assert_eq!(res, 3);
-    /// ```
-    pub fn register_helper(
-        &mut self,
-        key: u32,
-        function: fn(u64, u64, u64, u64, u64) -> u64,
-    ) -> Result<(), Error> {
-        self.parent.register_helper(key, function)
-    }
-
-    /// Execute the program loaded, with the given packet data.
-    ///
-    /// If the program is made to be compatible with Linux kernel, it is expected to load the
-    /// address of the beginning and of the end of the memory area used for packet data from some
-    /// metadata buffer, which in the case of this VM is handled internally. The offsets at which
-    /// the addresses should be placed should have be set at the creation of the VM.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let prog = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x79, 0x12, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem from r1[0x40] to r2
-    ///     0x07, 0x02, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, // add r2, 5
-    ///     0x79, 0x11, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, // load mem_end from r1[0x50] to r1
-    ///     0x2d, 0x12, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // if r2 > r1 skip 3 instructions
-    ///     0x71, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // load r2 (= *(mem + 5)) into r0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    /// let mem = &mut [
-    ///     0xaa, 0xbb, 0x11, 0x22, 0xcc, 0xdd
-    /// ];
-    ///
-    /// // Instantiate a VM. Note that we provide the start and end offsets for mem pointers.
-    /// let mut vm = rbpf::EbpfVmFixedMbuff::new(Some(prog), 0x40, 0x50).unwrap();
-    ///
-    /// // Provide only a reference to the packet data. We do not manage the metadata buffer.
-    /// let res = vm.execute_program(mem).unwrap();
-    /// assert_eq!(res, 0xdd);
-    /// ```
-    pub fn execute_program(&mut self, mem: &'a mut [u8]) -> Result<u64, Error> {
-        let l = self.mbuff.buffer.len();
-        // Can this ever happen? Probably not, should be ensured at mbuff creation.
-        if self.mbuff.data_offset + 8 > l || self.mbuff.data_end_offset + 8 > l {
-            Err(Error::new(ErrorKind::Other, format!("Error: buffer too small ({:?}), cannot use data_offset {:?} and data_end_offset {:?}",
-            l, self.mbuff.data_offset, self.mbuff.data_end_offset)))?;
-        }
-        LittleEndian::write_u64(
-            &mut self.mbuff.buffer[(self.mbuff.data_offset)..],
-            mem.as_ptr() as u64,
-        );
-        LittleEndian::write_u64(
-            &mut self.mbuff.buffer[(self.mbuff.data_end_offset)..],
-            mem.as_ptr() as u64 + mem.len() as u64,
-        );
-        self.parent.execute_program(mem, &self.mbuff.buffer)
-    }
-}
 
 /// A virtual machine to run eBPF program. This kind of VM is used for programs expecting to work
 /// directly on the memory area representing packet data.
@@ -671,9 +389,6 @@ impl<'a> EbpfVmRaw<'a> {
     /// // Change the verifier.
     /// vm.set_verifier(verifier).unwrap();
     /// ```
-    pub fn set_verifier(&mut self, verifier: Verifier) -> Result<(), Error> {
-        self.parent.set_verifier(verifier)
-    }
 
     /// Register a built-in or user-defined helper function in order to use it later from within
     /// the eBPF program. The helper is registered into a hashmap, so the `key` can be any `u32`.
@@ -714,7 +429,7 @@ impl<'a> EbpfVmRaw<'a> {
         &mut self,
         key: u32,
         function: fn(u64, u64, u64, u64, u64) -> u64,
-    ) -> Result<(), Error> {
+    ) {
         self.parent.register_helper(key, function)
     }
 
@@ -739,7 +454,7 @@ impl<'a> EbpfVmRaw<'a> {
     /// let res = vm.execute_program(mem).unwrap();
     /// assert_eq!(res, 0x22cc);
     /// ```
-    pub fn execute_program(&self, mem: &'a mut [u8]) -> Result<u64, Error> {
+    pub fn execute_program(&self, mem: &'a mut [u8]) {
         self.parent.execute_program(mem, &[])
     }
 }
@@ -838,39 +553,6 @@ impl<'a> EbpfVmNoData<'a> {
         Ok(())
     }
 
-    /// Set a new verifier function. The function should return an `Error` if the program should be
-    /// rejected by the virtual machine. If a program has been loaded to the VM already, the
-    /// verifier is immediately run.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::io::{Error, ErrorKind};
-    /// use rbpf::ebpf;
-    ///
-    /// // Define a simple verifier function.
-    /// fn verifier(prog: &[u8]) -> Result<(), Error> {
-    ///     let last_insn = ebpf::get_insn(prog, (prog.len() / ebpf::INSN_SIZE) - 1);
-    ///     if last_insn.opc != ebpf::EXIT {
-    ///         return Err(Error::new(ErrorKind::Other,
-    ///                    "[Verifier] Error: program does not end with “EXIT” instruction"));
-    ///     }
-    ///     Ok(())
-    /// }
-    ///
-    /// let prog1 = &[
-    ///     0xb7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov r0, 0
-    ///     0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // exit
-    /// ];
-    ///
-    /// // Instantiate a VM.
-    /// let mut vm = rbpf::EbpfVmMbuff::new(Some(prog1)).unwrap();
-    /// // Change the verifier.
-    /// vm.set_verifier(verifier).unwrap();
-    /// ```
-    pub fn set_verifier(&mut self, verifier: Verifier) -> Result<(), Error> {
-        self.parent.set_verifier(verifier)
-    }
 
     /// Register a built-in or user-defined helper function in order to use it later from within
     /// the eBPF program. The helper is registered into a hashmap, so the `key` can be any `u32`.
@@ -906,7 +588,7 @@ impl<'a> EbpfVmNoData<'a> {
         &mut self,
         key: u32,
         function: fn(u64, u64, u64, u64, u64) -> u64,
-    ) -> Result<(), Error> {
+    ) {
         self.parent.register_helper(key, function)
     }
 

@@ -4,6 +4,7 @@
 name = "rbpf"
 version = "0.2.0"
 authors = ["Quentin <quentin@isovalent.com>"]
+edition = "2021"
 
 # Additional metadata for packaging
 description = "Virtual machine and JIT compiler for eBPF programs"
@@ -26,11 +27,7 @@ include = [
 doctest = false
 
 [dependencies]
-
-combine = "4.6"
-libc = "0.2"
-time = "0.2"
-byteorder = "1.2"
+heapless = "0.8.0"
 
 [dev-dependencies]
 
